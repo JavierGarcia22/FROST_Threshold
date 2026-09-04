@@ -71,7 +71,7 @@ typedef struct {
     uint32_t participant_id;
     char device_identifier[256];
     
-    // FIXED: Add device-specific synchronization
+    // Device-specific synchronization
     CRITICAL_SECTION device_lock;
     bool lock_initialized;
     
@@ -161,7 +161,7 @@ typedef struct {
     uint8_t group_public_key[64];
 } parsed_participant_data_t;
 
-// FIXED: Thread-specific data structure with better synchronization
+
 typedef struct {
     int device_index;
     comm_handle_t* device;
@@ -172,12 +172,12 @@ typedef struct {
     // Results
     BOOL send_success;
     BOOL receive_success;
-    uint8_t receive_buffer[2048];  // FIXED: Larger buffer
+    uint8_t receive_buffer[2048];  
     size_t bytes_received;
     DWORD thread_id;
     HANDLE thread_handle;
     
-    // FIXED: Thread synchronization
+    // Thread synchronization
     HANDLE ready_event;
     HANDLE complete_event;
     volatile bool should_terminate;
@@ -187,6 +187,20 @@ typedef struct {
 static comm_handle_t discovered_devices[MAX_DEVICES];
 static int num_discovered_devices = 0;
 static CRITICAL_SECTION device_lock;
+
+static bool secure_random_bytes(unsigned char *buf, size_t len) {
+    NTSTATUS status = BCryptGenRandom(NULL, buf, (ULONG)len,
+                                       BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (!BCRYPT_SUCCESS(status)) {
+        printf("BCryptGenRandom failed: 0x%08lx\n", (unsigned long)status);
+        return false;
+    }
+    return true;
+}
+
+static bool secure_random_u32(uint32_t *out) {
+    return secure_random_bytes((unsigned char*)out, sizeof(*out));
+}
 
 void print_hex(const char *label, const unsigned char *data, size_t len) {
     printf("%s: ", label);
@@ -223,10 +237,7 @@ static int hex_to_bytes(const char* hex_str, uint8_t* bytes, size_t max_bytes) {
 }
 
 static bool fill_random_simple(unsigned char* buf, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        buf[i] = (unsigned char)(rand() & 0xFF);
-    }
-    return true;
+    return secure_random_bytes(buf, len);
 }
 
 HANDLE setup_uart_port(const char *port_name) {
@@ -265,7 +276,7 @@ HANDLE setup_uart_port(const char *port_name) {
     return hSerial;
 }
 
-// FIXED: Improved HID send with device-specific handling
+// HID send with device-specific handling
 BOOL send_hid_data_thread_safe(comm_handle_t* comm, const void* data, size_t len) {
     if (!comm->lock_initialized) {
         return FALSE;
@@ -281,7 +292,7 @@ BOOL send_hid_data_thread_safe(comm_handle_t* comm, const void* data, size_t len
     printf("[Thread %lu] HID Send: %zu bytes to participant %u\n", 
            GetCurrentThreadId(), len, comm->participant_id);
     
-    // FIXED: Offpad-specific pre-send stabilization
+    // Offpad-specific pre-send stabilization
     Sleep(OFFPAD_PRE_SEND_DELAY_MS);
     
     while (bytes_sent < len && retry_count < HID_SEND_RETRY_COUNT) {
@@ -296,7 +307,6 @@ BOOL send_hid_data_thread_safe(comm_handle_t* comm, const void* data, size_t len
         report[1] = (uint8_t)chunk_size;
         memcpy(report + 2, data_ptr + bytes_sent, chunk_size);
         
-        // FIXED: Try both HidD_SetOutputReport and WriteFile
         BOOL chunk_success = FALSE;
         
         if (HidD_SetOutputReport(comm->hid_handle, report, comm->output_report_length)) {
@@ -341,7 +351,7 @@ BOOL send_hid_data_thread_safe(comm_handle_t* comm, const void* data, size_t len
         }
     }
     
-    // FIXED: Offpad-specific post-send delay
+    // Offpad-specific post-send delay
     Sleep(OFFPAD_POST_SEND_DELAY_MS);
     
     LeaveCriticalSection(&comm->device_lock);
@@ -353,7 +363,6 @@ BOOL send_hid_data_thread_safe(comm_handle_t* comm, const void* data, size_t len
     return overall_success;
 }
 
-// FIXED: Improved HID receive with better error handling
 BOOL receive_hid_data_thread_safe(comm_handle_t* comm, void* buffer, size_t max_len, 
                                   size_t* bytes_read, DWORD timeout_ms) {
     if (!comm->lock_initialized) {
@@ -370,7 +379,7 @@ BOOL receive_hid_data_thread_safe(comm_handle_t* comm, void* buffer, size_t max_
     printf("[Thread %lu] HID Receive: max %zu bytes, timeout %lums\n", 
            GetCurrentThreadId(), max_len, timeout_ms);
     
-    // FIXED: Offpad-specific pre-receive delay
+    // Offpad-specific pre-receive delay
     Sleep(OFFPAD_PRE_RECEIVE_DELAY_MS);
     
     while (*bytes_read < max_len && 
@@ -383,7 +392,7 @@ BOOL receive_hid_data_thread_safe(comm_handle_t* comm, void* buffer, size_t max_
         DWORD bytes_read_hid = 0;
         BOOL read_success = FALSE;
         
-        // FIXED: Use overlapped I/O for better timeout control
+        // Use overlapped I/O for better timeout control
         OVERLAPPED overlapped = {0};
         overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
         
@@ -531,7 +540,6 @@ BOOL send_message(comm_handle_t* comm, uint8_t msg_type, uint32_t participant,
     return result;
 }
 
-// FIXED: Improved send thread with proper synchronization
 DWORD WINAPI device_send_thread(LPVOID param) {
     device_thread_data_t* data = (device_thread_data_t*)param;
     
@@ -551,7 +559,7 @@ DWORD WINAPI device_send_thread(LPVOID param) {
         return 0;
     }
     
-    // FIXED: Device-specific stabilization delay
+    // Device-specific stabilization delay
     Sleep(HID_DEVICE_STABILIZATION_MS);
     
     data->send_success = send_message(data->device, data->msg_type, 0, data->payload, data->payload_len);
@@ -565,7 +573,6 @@ DWORD WINAPI device_send_thread(LPVOID param) {
     return 0;
 }
 
-// FIXED: Improved receive thread with better error handling
 DWORD WINAPI device_receive_thread(LPVOID param) {
     device_thread_data_t* data = (device_thread_data_t*)param;
     
@@ -585,10 +592,9 @@ DWORD WINAPI device_receive_thread(LPVOID param) {
         return 0;
     }
     
-    // FIXED: Longer timeout for HID devices, especially offpad
     DWORD timeout = (data->device->type == COMM_TYPE_USB_HID) ? 35000 : 15000;
     
-    // FIXED: Additional stabilization for HID devices
+    // Additional stabilization for HID devices
     if (data->device->type == COMM_TYPE_USB_HID) {
         Sleep(HID_DEVICE_STABILIZATION_MS * 2);
     }
@@ -611,7 +617,6 @@ DWORD WINAPI device_receive_thread(LPVOID param) {
     return 0;
 }
 
-// FIXED: Improved broadcast with staggered start
 int broadcast_message_simultaneously(uint8_t msg_type, const void* payload, uint16_t payload_len) {
     printf("\n=== IMPROVED SIMULTANEOUS BROADCAST ===\n");
     printf("Broadcasting message type 0x%02X with staggered thread start\n", msg_type);
@@ -632,7 +637,7 @@ int broadcast_message_simultaneously(uint8_t msg_type, const void* payload, uint
             thread_data[active_threads].send_success = FALSE;
             thread_data[active_threads].should_terminate = FALSE;
             
-            // FIXED: Create synchronization events
+            // Create synchronization events
             thread_data[active_threads].ready_event = CreateEvent(NULL, FALSE, FALSE, NULL);
             thread_data[active_threads].complete_event = CreateEvent(NULL, FALSE, FALSE, NULL);
             
@@ -653,7 +658,7 @@ int broadcast_message_simultaneously(uint8_t msg_type, const void* payload, uint
     
     printf("Created %d send threads\n", active_threads);
     
-    // FIXED: Start threads with staggered timing
+    // Start threads with staggered timing
     for (int i = 0; i < active_threads; i++) {
         SetEvent(thread_data[i].ready_event);
         Sleep(50);  // Stagger thread starts
@@ -684,7 +689,6 @@ int broadcast_message_simultaneously(uint8_t msg_type, const void* payload, uint
     return successful_sends;
 }
 
-// FIXED: Improved response collection with staggered start
 int collect_responses_simultaneously(participant_data_t* participants, uint8_t expected_msg_type, 
                                     int target_count, DWORD timeout_ms) {
     printf("\n=== IMPROVED SIMULTANEOUS COLLECTION ===\n");
@@ -727,7 +731,7 @@ int collect_responses_simultaneously(participant_data_t* participants, uint8_t e
     
     printf("Created %d receive threads\n", active_threads);
     
-    // FIXED: Start threads with staggered timing
+    // Start threads with staggered timing
     for (int i = 0; i < active_threads; i++) {
         SetEvent(thread_data[i].ready_event);
         Sleep(100);  // Longer stagger for receive threads
@@ -798,7 +802,7 @@ int collect_responses_simultaneously(participant_data_t* participants, uint8_t e
     return collected_count;
 }
 
-// FIXED: Initialize device locks during discovery
+// Initialize device locks during discovery
 static void initialize_device_lock(comm_handle_t* device) {
     if (!device->lock_initialized) {
         InitializeCriticalSection(&device->device_lock);
@@ -1015,7 +1019,7 @@ int discover_uart_devices(void) {
                 device->uart_handle = uart_handle;
                 strcpy(device->device_identifier, port_name);
                 
-                // FIXED: Initialize device lock for UART too
+                // Initialize device lock for UART
                 initialize_device_lock(device);
                 
                 printf("  Successfully set up UART participant %d on %s\n", participant_id, port_name);
@@ -1164,7 +1168,7 @@ int discover_hid_devices(void) {
                                     device->input_report_length = capabilities.InputReportByteLength;
                                     strcpy(device->device_identifier, device_interface_detail_data->DevicePath);
                                     
-                                    // FIXED: Initialize device-specific lock
+                                    // Initialize device-specific lock
                                     initialize_device_lock(device);
                                     
                                     printf("  Successfully set up HID participant %u\n", participant_id);
@@ -1199,7 +1203,7 @@ int discover_hid_devices(void) {
     return discovered_count;
 }
 
-// Local computer participant functions (keeping original implementation)
+// Local computer participant functions
 static int generate_and_save_nonce_PHASE1_local(comm_handle_t* comm, secp256k1_context* ctx) {
     if (comm->type != COMM_TYPE_LOCAL_COMPUTER) {
         return -1;
@@ -1208,7 +1212,10 @@ static int generate_and_save_nonce_PHASE1_local(comm_handle_t* comm, secp256k1_c
     printf("=== PHASE 1: GENERATE AND PERSIST NONCE (LOCAL FILE) ===\n");
     printf("Generating fresh nonce for participant %u\n", comm->keypair.public_keys.index);
     
-    comm->session_id = rand();
+    if (!secure_random_u32(&comm->session_id)) {
+        printf("Failed to generate secure random session ID\n");
+        return -1;
+    }
     
     unsigned char binding_seed[32] = {0};
     unsigned char hiding_seed[32] = {0};
@@ -1510,14 +1517,13 @@ static bool process_sign_message_local_computer_PHASE2(comm_handle_t* comm, secp
     }
 }
 
-// FIXED: Updated collection functions with simultaneous communication
 int collect_commitments_from_devices(participant_data_t* participants, int target_count, DWORD timeout_ms) {
     printf("\n=== COLLECTING COMMITMENTS (FIXED SIMULTANEOUS MODE) ===\n");
     
     int collected_count = 0;
     secp256k1_context* temp_ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
     
-    // First, process all local computer participants (unchanged)
+    // Process all local computer participants 
     for (int i = 0; i < num_discovered_devices && collected_count < target_count; i++) {
         if (!discovered_devices[i].active || discovered_devices[i].type != COMM_TYPE_LOCAL_COMPUTER) {
             continue;
@@ -1556,7 +1562,7 @@ int collect_commitments_from_devices(participant_data_t* participants, int targe
         }
     }
     
-    // Then collect from external devices SIMULTANEOUSLY
+    // Collect from external devices SIMULTANEOUSLY
     if (collected_count < target_count) {
         printf("Need %d more commitments from external devices\n", target_count - collected_count);
         int external_collected = collect_responses_simultaneously(participants, MSG_TYPE_NONCE_COMMITMENT, 
@@ -1579,7 +1585,7 @@ int collect_signature_shares_from_devices(participant_data_t* participants, int 
     int collected_count = 0;
     secp256k1_context* temp_ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
     
-    // First process local computer participants (unchanged)
+    // Process local computer participants
     for (int i = 0; i < num_discovered_devices && collected_count < target_count; i++) {
         if (!discovered_devices[i].active || 
             discovered_devices[i].type != COMM_TYPE_LOCAL_COMPUTER ||
@@ -1618,7 +1624,7 @@ int collect_signature_shares_from_devices(participant_data_t* participants, int 
         }
     }
     
-    // Then collect from external devices SIMULTANEOUSLY
+    // Collect from external devices SIMULTANEOUSLY
     if (collected_count < target_count) {
         printf("Need %d more signature shares from external devices\n", target_count - collected_count);
         int external_collected = collect_responses_simultaneously(participants, MSG_TYPE_SIGNATURE_SHARE,
@@ -1645,7 +1651,7 @@ void close_communication(comm_handle_t* comm) {
         comm->hid_handle = INVALID_HANDLE_VALUE;
     }
     
-    // FIXED: Clean up device lock
+    // Clean up device lock
     cleanup_device_lock(comm);
     comm->active = false;
 }
@@ -1843,7 +1849,6 @@ int main(void) {
     printf("Fixed simultaneous communication with offpad board support\n");
     printf("Device-specific synchronization and enhanced HID error handling\n\n");
     
-    srand((unsigned int)time(NULL));
     InitializeCriticalSection(&device_lock);
     
     secp256k1_context* main_ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
