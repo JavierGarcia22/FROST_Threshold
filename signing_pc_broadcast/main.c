@@ -9,8 +9,10 @@
 #include <windows.h>
 #include <setupapi.h>
 #include <hidsdi.h>
+#include <bcrypt.h>
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "hid.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 #define N 3
 #define T 2
