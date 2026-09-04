@@ -12,8 +12,10 @@
 #include <windows.h>
 #include <setupapi.h>
 #include <hidsdi.h>
+#include <bcrypt.h>
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "hid.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 #define N 3
 #define T 2
@@ -136,27 +138,37 @@ void print_hex(const char *label, const unsigned char *data, size_t len) {
     printf("\n");
 }
 
+static int secure_random_bytes(uint8_t *buf, size_t len) {
+    NTSTATUS status = BCryptGenRandom(NULL, buf, (ULONG)len,
+                                       BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (!BCRYPT_SUCCESS(status)) {
+        printf("BCryptGenRandom failed: 0x%08lx\n", (unsigned long)status);
+        return 0;
+    }
+    return 1;
+}
+
 void generate_random_context(uint8_t* context, size_t len) {
-    srand((unsigned int)time(NULL));
-    for (size_t i = 0; i < len; i++) {
-        context[i] = (uint8_t)(rand() & 0xFF);
+    if (!secure_random_bytes(context, len)) {
+        fprintf(stderr, "FATAL: failed to generate secure random DKG context\n");
+        exit(1);
     }
 }
 
 int ecc_elgamal_keygen(secp256k1_context *ctx, ecc_elgamal_keypair_t *keypair) {
-    srand((unsigned int)time(NULL) + rand());
-    for (int i = 0; i < 32; i++) {
-        keypair->private_key[i] = (uint8_t)(rand() & 0xFF);
+    if (!secure_random_bytes(keypair->private_key, 32)) {
+        printf("Failed to generate secure random ElGamal private key\n");
+        return 0;
     }
     if (keypair->private_key[0] == 0) keypair->private_key[0] = 0x01;
-    
+ 
     if (!secp256k1_ec_pubkey_create(ctx, &keypair->public_key, keypair->private_key)) {
         printf("Failed to create ElGamal public key\n");
         return 0;
     }
     return 1;
 }
-
+ 
 int ecc_elgamal_encrypt_value(secp256k1_context *ctx, const secp256k1_pubkey *recipient_pubkey,
                               const uint8_t *value_32_bytes,
                               secp256k1_pubkey *c1_out, uint8_t *c2_out, bool verbose) {
@@ -169,9 +181,9 @@ int ecc_elgamal_encrypt_value(secp256k1_context *ctx, const secp256k1_pubkey *re
         printf("...\n");
     }
     
-    srand((unsigned int)time(NULL) + rand());
-    for (int i = 0; i < 32; i++) {
-        ephemeral_key[i] = (uint8_t)(rand() & 0xFF);
+    if (!secure_random_bytes(ephemeral_key, 32)) {
+        printf("Failed to generate secure random ephemeral key\n");
+        return 0;
     }
     if (ephemeral_key[0] == 0) ephemeral_key[0] = 0x01;
     
